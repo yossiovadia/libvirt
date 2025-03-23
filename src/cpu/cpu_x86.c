@@ -1187,6 +1187,8 @@ x86FeatureParse(xmlXPathContextPtr ctxt,
     virCPUx86Map *map = data;
     g_autoptr(virCPUx86Feature) feature = NULL;
     g_autofree char *str = NULL;
+    xmlNodePtr *nodes = NULL;
+    int n;
 
     feature = g_new0(virCPUx86Feature, 1);
     feature->migratable = true;
@@ -1204,6 +1206,28 @@ x86FeatureParse(xmlXPathContextPtr ctxt,
 
     if (x86ParseDataItemList(&feature->data, ctxt->node) < 0)
         return -1;
+    
+    /* Process dependencies */
+    if ((n = virXPathNodeSet("./depends/feature", ctxt, &nodes)) > 0) {
+        size_t i;
+        
+        for (i = 0; i < n; i++) {
+            g_autofree char *depname = virXMLPropString(nodes[i], "name");
+            if (!depname) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                              _("Missing name for feature dependency in %1$s"),
+                              feature->name);
+                VIR_FREE(nodes);
+                return -1;
+            }
+            
+            if (!x86FeatureFind(map, depname)) {
+                VIR_DEBUG("Feature '%s' depends on undefined feature '%s'",
+                          feature->name, depname);
+            }
+        }
+    }
+    VIR_FREE(nodes);
 
     if (!feature->migratable)
         VIR_APPEND_ELEMENT_COPY(map->migrate_blockers, map->nblockers, feature);
@@ -3768,7 +3792,6 @@ virCPUx86GetCanonicalModel(const char *modelName)
     return model->canonical->name;
 }
 
-
 struct cpuArchDriver cpuDriverX86 = {
     .name = "x86",
     .arch = archs,
@@ -3804,3 +3827,117 @@ struct cpuArchDriver cpuDriverX86 = {
     .getCheckMode = virCPUx86GetCheckMode,
     .getCanonicalModel = virCPUx86GetCanonicalModel,
 };
+
+/* Function to check and enforce CPU feature dependencies */
+int 
+virCPUx86CheckFeatureDependencies(virCPUDef *cpu)
+{
+    virCPUx86Map *map;
+    xmlXPathContextPtr ctxt = NULL;
+    size_t i;
+    int ret = -1;
+    bool changed = false;
+    
+    VIR_DEBUG("Checking CPU feature dependencies");
+    
+    if (!cpu || cpu->nfeatures == 0)
+        return 0;
+        
+    if (!(map = virCPUx86GetMap()))
+        return -1;
+        
+    /* Iterate through all required features and ensure their dependencies are satisfied */
+    do {
+        changed = false;
+        
+        for (i = 0; i < cpu->nfeatures; i++) {
+            xmlNodePtr *dep_nodes = NULL;
+            int n;
+            xmlDocPtr doc = NULL;
+            xmlNodePtr feature_node = NULL;
+            g_autofree char *xpath = NULL;
+            
+            /* Skip if not requiring the feature */
+            if (cpu->features[i].policy != VIR_CPU_FEATURE_REQUIRE &&
+                cpu->features[i].policy != VIR_CPU_FEATURE_FORCE)
+                continue;
+            
+            /* Find this feature in the map's XML */
+            xpath = g_strdup_printf("/cpus/feature[@name='%s']", cpu->features[i].name);
+            
+            if (map->document) {
+                ctxt = xmlXPathNewContext(map->document);
+                if (!ctxt) {
+                    virReportOOMError();
+                    goto cleanup;
+                }
+                
+                feature_node = virXPathNode(xpath, ctxt);
+                if (!feature_node)
+                    continue;  /* Feature not in map - can't check dependencies */
+                    
+                /* Look for dependencies */
+                n = virXPathNodeSet("./depends/feature", ctxt, &dep_nodes);
+                if (n <= 0) {
+                    VIR_FREE(dep_nodes);
+                    xmlXPathFreeContext(ctxt);
+                    ctxt = NULL;
+                    continue;  /* No dependencies */
+                }
+                
+                /* Process dependencies */
+                for (int j = 0; j < n; j++) {
+                    g_autofree char *depname = virXMLPropString(dep_nodes[j], "name");
+                    if (!depname)
+                        continue;
+                        
+                    VIR_DEBUG("Feature '%s' depends on '%s'", cpu->features[i].name, depname);
+                    
+                    /* Check if dependency is already in the CPU def with required policy */
+                    bool found = false;
+                    for (size_t k = 0; k < cpu->nfeatures; k++) {
+                        if (STREQ(cpu->features[k].name, depname) &&
+                            (cpu->features[k].policy == VIR_CPU_FEATURE_REQUIRE ||
+                             cpu->features[k].policy == VIR_CPU_FEATURE_FORCE)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    
+                    /* If dependency not found or disabled, add it */
+                    if (!found) {
+                        virCPUFeatureDef *feat;
+                        size_t old_nfeatures = cpu->nfeatures;
+                        
+                        VIR_DEBUG("Adding required dependency '%s' for feature '%s'",
+                                  depname, cpu->features[i].name);
+                        
+                        if (VIR_RESIZE_N(cpu->features, cpu->nfeatures_max,
+                                         cpu->nfeatures, 1) < 0) {
+                            virReportOOMError();
+                            VIR_FREE(dep_nodes);
+                            goto cleanup;
+                        }
+                        
+                        feat = cpu->features + cpu->nfeatures;
+                        feat->name = g_strdup(depname);
+                        feat->policy = VIR_CPU_FEATURE_REQUIRE;
+                        cpu->nfeatures++;
+                        changed = true;
+                    }
+                }
+                
+                VIR_FREE(dep_nodes);
+                xmlXPathFreeContext(ctxt);
+                ctxt = NULL;
+            }
+        }
+    } while (changed);
+    
+    ret = 0;
+
+cleanup:
+    if (ctxt)
+        xmlXPathFreeContext(ctxt);
+    return ret;
+}

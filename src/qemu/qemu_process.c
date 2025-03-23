@@ -4820,9 +4820,9 @@ qemuPrepareNVRAM(virQEMUDriver *driver,
 
 static void
 qemuLogOperation(virDomainObj *vm,
-                 const char *msg,
-                 virCommand *cmd,
-                 domainLogContext *logCtxt)
+                  const char *msg,
+                  virCommand *cmd,
+                  domainLogContext *logCtxt)
 {
     g_autofree char *timestamp = NULL;
     qemuDomainObjPrivate *priv = vm->privateData;
@@ -5736,24 +5736,29 @@ qemuProcessStartValidate(virQEMUDriver *driver,
         if (virCPUValidateFeatures(vm->def->os.arch, vm->def->cpu) < 0)
             return -1;
 
-        if (ARCH_IS_X86(vm->def->os.arch) &&
-            !virQEMUCapsGet(qemuCaps, QEMU_CAPS_CPU_UNAVAILABLE_FEATURES)) {
-            g_auto(GStrv) features = NULL;
-            int n;
-
-            if ((n = virCPUDefCheckFeatures(vm->def->cpu,
-                                            virCPUx86FeatureFilterSelectMSR,
-                                            NULL,
-                                            &features)) < 0)
+        if (ARCH_IS_X86(vm->def->os.arch)) {
+            /* Check and enforce CPU feature dependencies */
+            if (virCPUx86CheckFeatureDependencies(vm->def->cpu) < 0)
                 return -1;
+                
+            if (!virQEMUCapsGet(qemuCaps, QEMU_CAPS_CPU_UNAVAILABLE_FEATURES)) {
+                g_auto(GStrv) features = NULL;
+                int n;
 
-            if (n > 0) {
-                g_autofree char *str = NULL;
+                if ((n = virCPUDefCheckFeatures(vm->def->cpu,
+                                                virCPUx86FeatureFilterSelectMSR,
+                                                NULL,
+                                                &features)) < 0)
+                    return -1;
 
-                str = g_strjoinv(", ", features);
-                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                               _("Some features cannot be reliably used with this QEMU: %1$s"), str);
-                return -1;
+                if (n > 0) {
+                    g_autofree char *str = NULL;
+
+                    str = g_strjoinv(", ", features);
+                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                                   _("Some features cannot be reliably used with this QEMU: %1$s"), str);
+                    return -1;
+                }
             }
         }
     }
@@ -7670,7 +7675,7 @@ qemuProcessGenID(virDomainObj *vm,
 /**
  * qemuProcessSetupDiskThrottling:
  *
- * Sets up disk trottling for -blockdev via block_set_io_throttle monitor
+ * Sets up disk throttling for -blockdev via block_set_io_throttle monitor
  * command. This hack should be replaced by proper use of the 'throttle'
  * blockdev driver in qemu once it will support changing of the throttle group.
  * Same hack is done in qemuDomainAttachDiskGeneric.

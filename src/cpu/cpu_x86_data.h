@@ -92,3 +92,11 @@ struct _virCPUx86Data {
     size_t len;
     virCPUx86DataItem *items;
 };
+
+/* Structure to hold CPU feature dependency information */
+typedef struct _virCPUx86FeatureDependency virCPUx86FeatureDependency;
+struct _virCPUx86FeatureDependency {
+    char *name;            /* Name of the feature that depends on others */
+    char **depends;        /* Names of features this one depends on */
+    size_t ndepends;       /* Number of dependency features */
+};

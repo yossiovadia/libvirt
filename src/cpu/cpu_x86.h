@@ -51,3 +51,6 @@ bool virCPUx86FeatureFilterDropMSR(const char *name,
 
 int virCPUx86GetAddedFeatures(const char *modelName,
                               const char * const **features);
+
+/* Check feature dependencies and enable required features */
+int virCPUx86CheckFeatureDependencies(virCPUDef *cpu);

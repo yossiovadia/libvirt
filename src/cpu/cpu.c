@@ -746,6 +746,12 @@ virCPUUpdateLive(virArch arch,
 
     if (cpu->mode == VIR_CPU_MODE_CUSTOM ||
         cpu->check == VIR_CPU_CHECK_FULL) {
+        
+        /* For x86 CPUs, check feature dependencies before updating CPU */
+        if (ARCH_IS_X86(arch) && cpu->mode == VIR_CPU_MODE_CUSTOM &&
+            virCPUx86CheckFeatureDependencies(cpu) < 0)
+            return -1;
+            
         if (driver->updateLive(cpu, dataEnabled, dataDisabled) < 0)
             return -1;
 

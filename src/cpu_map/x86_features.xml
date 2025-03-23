@@ -313,6 +313,11 @@
   </feature>
   <feature name='waitpkg'>
     <cpuid eax_in='0x00000007' ecx_in='0x00000000' ecx='0x00000020'/>
+    <depends>
+      <feature name="movdiri"/>
+      <feature name="movdir64b"/>
+      <feature name="cldemote"/>
+    </depends>
   </feature>
   <feature name='avx512vbmi2'>
     <cpuid eax_in='0x00000007' ecx_in='0x00000000' ecx='0x00000040'/>
